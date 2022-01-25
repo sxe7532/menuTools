@@ -1,0 +1,74 @@
+#lambda_function.py
+
+import json
+import hashlib
+import hmac
+import boto3
+from botocore.exceptions import ClientError
+import base64
+from urllib import parse as urlparse
+import time
+import os
+
+helper_text = """
+Syntax: `/menutools
+"""
+
+
+# Simple notification service ARN
+SNS_TOPIC_ARN = 'arn:aws:sns:us-east-1:xxxxxx:slackapp_run_menuTools'
+SLACK_CHANNEL_ID = "xxxxxx"
+
+
+def lambda_handler(event, context):
+    
+    request_body = event["body"]
+    request_body_parsed = dict(urlparse.parse_qsl(request_body))
+
+    
+    channel_id = request_body_parsed["channel_id"]
+    
+    if channel_id == SLACK_CHANNEL_ID:
+        delivered_signature = event["headers"]['X-Slack-Signature']
+
+        slack_request_timestamp = event["headers"]['X-Slack-Request-Timestamp']
+
+        slack_signing_secret = getParameter('menuTools_slackapp_secret')
+        
+        basestring = f"v0:{slack_request_timestamp}:{request_body}".encode('utf-8')
+        
+        slack_signing_secret = bytes(slack_signing_secret, 'utf-8')
+        expected_signature = 'v0=' + hmac.new(slack_signing_secret, basestring, hashlib.sha256).hexdigest()
+            
+        current_time = time.time()
+        slack_request_timestamp_asFloat = float(slack_request_timestamp)
+        
+        if (current_time - slack_request_timestamp_asFloat) > 300:
+            response_text = "Message more than 5 minutes old"
+            response_code = 412
+        # Confirm that delivered signature is the same as the expected_signature
+        elif hmac.compare_digest(expected_signature, delivered_signature):
+            response_text = "Searching for all IT Tools..:eyes:"
+            response_code = 200
+            client = boto3.client('sns')
+            trigger = client.publish(TargetArn = SNS_TOPIC_ARN,Message=json.dumps({'default': json.dumps(request_body_parsed)}),MessageStructure='json') 
+        else:
+            response_text = "Message signature is invalid"
+            response_code = 412
+    else:
+        response_text = ":warning: You must use `/menutools` while inside an authorized channel."
+        # Returning status code of 200 so that response text is presented to user
+        response_code = 200
+
+    return {
+        'statusCode': response_code,
+        'body': response_text
+    }
+    
+            
+def getParameter(param_name):
+    session = boto3.Session(region_name='us-east-1')
+    ssm = session.client('ssm')
+    response = ssm.get_parameter(Name=param_name,WithDecryption=True)
+    return response['Parameter']['Value']
+    import json
